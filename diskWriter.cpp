@@ -88,7 +88,7 @@ void generateResults(string writePath, string logPath, int passes, unsigned long
     ostringstream output;
 
     // CSV Format
-    output << "pass_number, pass_time, average_time, microseconds_since_last_write, nsSleep_time\n";
+    output << "pass_number, pass_time_us, average_time_us, time_since_last_write_us, sleep_time_us\n";
 
     chrono::steady_clock::time_point overallStart;
     chrono::steady_clock::time_point passStart;
