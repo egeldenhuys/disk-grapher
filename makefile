@@ -1,2 +1,2 @@
-resultGenerator.out: resultGenerator.cpp
-	g++ -Wall -pedantic -std=c++11 resultGenerator.cpp -o resultGenerator.out
+diskWriter: diskWriter.cpp
+	g++ -Wall -pedantic -std=c++11 diskWriter.cpp -o diskWriter

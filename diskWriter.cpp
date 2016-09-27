@@ -56,31 +56,39 @@ void writeFile(string writePath, bool useBuffer)
 }
 
 
-void generateResults(string writePath, string logPath, int passes, ulong sleep, ulong sleepStep, bool useBuffer)
+void generateResults(string writePath, string logPath, int passes, unsigned long long int nsSleep, unsigned long long int  nsSleepStep, bool useBuffer, bool zeroSleep, float maxDev, bool displayOutliers)
 {
-    const ulong MAX_SLEEP = 899999999;
+    // Given as us
+    nsSleep = nsSleep * 1000;
+    nsSleepStep = nsSleepStep * 1000;
+
+    const ulong MAX_SLEEP = 999999998;
 
     struct timespec timeOut,remains;
     timeOut.tv_sec = 0;
-    timeOut.tv_nsec = sleep;
+    timeOut.tv_nsec = nsSleep;
 
     struct timespec timeOutMax,remainsMax;
-    timeOut.tv_sec = 0;
-    timeOut.tv_nsec = MAX_SLEEP;
+    timeOutMax.tv_sec = 0;
+    timeOutMax.tv_nsec = MAX_SLEEP;
 
     ulong extraSleeps = 0;
 
-    while (sleep > MAX_SLEEP)
+    while (nsSleep >= MAX_SLEEP)
     {
-        sleep -= MAX_SLEEP;
+        cout << "nsSleep = " << nsSleep << endl;
+        nsSleep -= MAX_SLEEP;
         extraSleeps++;
+
+        cout << "extrasleeps ++: " << extraSleeps << "\n";
+        cout << "nsSleep = " << nsSleep << endl;
     }
-    timeOut.tv_nsec = sleep;
+    timeOut.tv_nsec = nsSleep;
 
     ostringstream output;
 
     // CSV Format
-    // pass, pass_time, average_time, microseconds_since_last_write, sleep
+    output << "pass_number, pass_time, average_time, microseconds_since_last_write, nsSleep_time\n";
 
     chrono::steady_clock::time_point overallStart;
     chrono::steady_clock::time_point passStart;
@@ -100,38 +108,81 @@ void generateResults(string writePath, string logPath, int passes, ulong sleep, 
     for (int i = 1; i < passes + 1; i++)
     {
         usTimeSinceLastWrite = chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now() - passEnd).count();
+        //cout << "Time since last write = " << usTimeSinceLastWrite << endl;
 
         passStart = chrono::steady_clock::now();
         writeFile(writePath, useBuffer);
         passEnd = chrono::steady_clock::now();
 
         usPassDuration = chrono::duration_cast<chrono::microseconds>(passEnd- passStart).count();
-
         usTotalTime += usPassDuration;
-
         usAvgPassTime = usTotalTime / i;
 
-        output << i << ", " << usPassDuration << ", " << usAvgPassTime << ", " << usTimeSinceLastWrite << ", " << (sleep + extraSleeps * MAX_SLEEP) / 1000 << "\n";
-
-        //cout << "SLEEP FOR " << sleep << " ns\n";
-
-        nanosleep(&timeOut, &remains);
-
-        for (ulong j = 0; j < extraSleeps; j++)
+        // Check if we get wacky results
+        if (usPassDuration > (usAvgPassTime * maxDev))
         {
-            //cout << "SLEEP FOR " << MAX_SLEEP << " ns\n";
-            nanosleep(&timeOutMax, &remainsMax);
+            usTotalTime -= usPassDuration;
+            usAvgPassTime = usTotalTime / (i - 1);
+
+            if (displayOutliers)
+            {
+                cout << "Not adding to avg:\n";
+                cout << "Outlier: " << usPassDuration << " microseconds\n";
+                cout << "Avg    : " << usAvgPassTime << " microseconds\n\n";
+
+                output << i << ", " << usPassDuration << ", " << usAvgPassTime << ", " << usTimeSinceLastWrite << ", " << (nsSleep + extraSleeps * MAX_SLEEP) / 1000 << "\n";
+            }
+            else
+            {
+                i--;
+                zeroSleep = true;
+                cout << "Not adding to csv:\n";
+                cout << "Outlier: " << usPassDuration << " microseconds\n";
+                cout << "Avg    : " << usAvgPassTime << " microseconds\n\n";
+            }
+        }
+        else
+        {
+            output << i << ", " << usPassDuration << ", " << usAvgPassTime << ", " << usTimeSinceLastWrite << ", " << (nsSleep + extraSleeps * MAX_SLEEP) / 1000 << "\n";
         }
 
 
-        // Get difference between the new sleep and the max sleep
-        sleep += sleepStep;
-        while (sleep > MAX_SLEEP)
+        // if zeroSleep is false we do not want to skip on first pass (=true)
+        // if zero sleep is false and we are not no the first pass
+
+        // If zero sleep is true, return false if on the first pass
+
+        // False when zeroSleep and i == 1
+        // True when !zeroSleep
+
+        if (!zeroSleep)
         {
-            sleep -= MAX_SLEEP;
-            extraSleeps++;
+            //cout << "Sleep for " << nsSleep << " ns\n";
+
+            nanosleep(&timeOut, &remains);
+
+            for (ulong j = 0; j < extraSleeps; j++)
+            {
+                //cout << "SLEEP FOR " << MAX_SLEEP << " ns\n";
+                nanosleep(&timeOutMax, &remainsMax);
+            }
+
+            // Get difference between the new nsSleep and the max nsSleep
+            nsSleep += nsSleepStep;
+            while (nsSleep >= MAX_SLEEP)
+            {
+                //cout << "nsSleep = " << nsSleep << endl;
+                nsSleep -= MAX_SLEEP;
+                extraSleeps++;
+
+                //cout << "extrasleeps ++: " << extraSleeps << "\n";
+                //cout << "nsSleep = " << nsSleep << endl;
+            }
+            timeOut.tv_nsec = nsSleep;
         }
-        timeOut.tv_nsec = sleep;
+
+        if (zeroSleep && i != 1)
+            zeroSleep = !zeroSleep;
 
     }
 
@@ -153,8 +204,12 @@ void printHelp()
     cout << " -p, --passes \t\t Number of times to write the test file and record times\n";
     cout << " -s, --sleep \t\t Microseconds to wait between passes\n";
     cout << " -t, --sleep-step \t Microseconds to increase the sleep after each pass\n";
-    cout << " -b, --use-buffer\t [0|1] Use the buffer method of writing to disk?\n";
+    cout << " -b, --use-buffer=1\t [0|1] Use the buffer method of writing to disk?\n";
+    cout << " -z, --initial-zero-sleep=0\t [0|1] Use 0 sleep for second pass?\n";
+    cout << " -d, --max-deviation=20\t Acceptable deviation from avg \n";
+    cout << " -u, --display-outliers=1\t [0|1] Include the passes caught by -d in the .csv (Does not affect average) \n";
     cout << " -h, --help \t\t Print this help text\n";
+
 
 }
 
@@ -171,11 +226,11 @@ int main(int argc, char *argv[])
     flagMap.insert( pair<string, int>("--passes", 1));
     flagMap.insert( pair<string, int>("-p", 1));
 
-    ulong sleep = 0;
+    unsigned long long int sleep = 0;
     flagMap.insert( pair<string, int>("--sleep", 2));
     flagMap.insert( pair<string, int>("-s", 2));
 
-    ulong sleepStep = 0;
+    unsigned long long int sleepStep = 0;
     flagMap.insert( pair<string, int>("--sleep-step", 3));
     flagMap.insert( pair<string, int>("-t", 3));
 
@@ -189,6 +244,18 @@ int main(int argc, char *argv[])
 
     flagMap.insert( pair<string, int>("--help", 6));
     flagMap.insert( pair<string, int>("-h", 6));
+
+    bool zeroSleep = 0;
+    flagMap.insert( pair<string, int>("--initial-zero-sleep", 7));
+    flagMap.insert( pair<string, int>("-z", 7));
+
+    float maxDev = 20;
+    flagMap.insert( pair<string, int>("--max-deviation", 8));
+    flagMap.insert( pair<string, int>("-d", 8));
+
+    bool displayOutliers = 1;
+    flagMap.insert( pair<string, int>("--display-outliers", 9));
+    flagMap.insert( pair<string, int>("-u", 9));
 
     std::map<string,int>::iterator it;
 
@@ -207,7 +274,7 @@ int main(int argc, char *argv[])
             switch(flagMap.find(flag)->second)
             {
                 case(0):
-                    logPath = argv[i];
+                    logPath = value;
                     break;
 
                 case(1):
@@ -215,13 +282,14 @@ int main(int argc, char *argv[])
                     break;
 
                 case(2):
-                    sleep = stol(value);
-                    sleep = sleep * 1000;
+                    sleep = stoull(value);
+                    //cout << value << endl;
+                    //sleep = sleep;
                     break;
 
                 case(3):
-                    sleepStep = stol(value);
-                    sleepStep = sleepStep * 1000;
+                    sleepStep = stoull(value);
+                    //sleepStep = sleepStep;
                     break;
 
                 case(4):
@@ -230,6 +298,18 @@ int main(int argc, char *argv[])
 
                 case(5):
                     useBuffer = stoi(value);
+                    break;
+
+                case(7):
+                    zeroSleep = stoi(value);
+                    break;
+
+                case(8):
+                    maxDev = stof(value);
+                    break;
+
+                case(9):
+                    displayOutliers = stoi(value);
                     break;
 
                 case(6):
@@ -244,7 +324,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    generateResults(writePath, logPath, passes, sleep, sleepStep, useBuffer);
+
+    generateResults(writePath, logPath, passes, sleep, sleepStep, useBuffer, zeroSleep, maxDev, displayOutliers);
 
     return 0;
 }
